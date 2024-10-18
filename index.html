@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Морской бой</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f0f8ff;
+        }
+
+        .game-container {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        #player-board, #computer-board {
+            display: grid;
+            grid-template-columns: repeat(10, 30px);
+            grid-template-rows: repeat(10, 30px);
+            gap: 2px;
+        }
+
+        .cell {
+            width: 30px;
+            height: 30px;
+            background-color: #bdd5fb;
+            border: 1px solid #4682b4;
+            cursor: pointer;
+        }
+
+        .cell.hit {
+            background-color: #ff6347;
+        }
+
+        .cell.miss {
+            background-color: #dfdfdf;
+        }
+
+        .cell.ship.player {
+            background-color: #64a0ff;
+        }
+
+        .scoreboard {
+            margin-top: 20px;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Морской бой</h1>
+    <div class="scoreboard">
+        Победы компьютера: <span id="computer-wins">0</span> | Победы игрока: <span id="player-wins">0</span>
+    </div>
+    <div class="game-container">
+        <div class="player-board" id="player-board"></div>
+        <div class="computer-board" id="computer-board"></div>
+    </div>
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const playerBoard = document.getElementById("player-board");
+            const computerBoard = document.getElementById("computer-board");
+            const playerWinsElement = document.getElementById("player-wins");
+            const computerWinsElement = document.getElementById("computer-wins");
+            let playerWins = 0;
+            let computerWins = 0;
+            let playerTurn = true;
+            let targetDamagedShip = null;
+            let damagedCellsQueue = [];
+            let attackDirection = null;
+            let attackedCells = new Set();
+
+            // Создание игрового поля
+            function createBoard(boardElement) {
+                for (let i = 0; i < 100; i++) {
+                    const cell = document.createElement("div");
+                    cell.classList.add("cell");
+                    boardElement.appendChild(cell);
+                }
+            }
+
+            // Генерация игровых досок для игрока и компьютера
+            createBoard(playerBoard);
+            createBoard(computerBoard);
+
+            // Размещение кораблей на доске
+            function placeShipsRandomly(boardElement, isPlayer = false) {
+                const cells = boardElement.querySelectorAll(".cell");
+                const shipTypes = [
+                    { size: 4, count: 1 },
+                    { size: 3, count: 2 },
+                    { size: 2, count: 3 },
+                    { size: 1, count: 4 }
+                ];
+
+                shipTypes.forEach(ship => {
+                    for (let i = 0; i < ship.count; i++) {
+                        let placed = false;
+                        while (!placed) {
+                            const direction = Math.random() < 0.5 ? 'horizontal' : 'vertical';
+                            const index = Math.floor(Math.random() * 100);
+                            if (canPlaceShip(cells, index, ship.size, direction)) {
+                                placeShip(cells, index, ship.size, direction, isPlayer);
+                                placed = true;
+                            }
+                        }
+                    }
+                });
+            }
+
+            function canPlaceShip(cells, index, size, direction) {
+                const row = Math.floor(index / 10);
+                const col = index % 10;
+
+                for (let i = 0; i < size; i++) {
+                    const currentIndex = direction === 'horizontal' ? index + i : index + i * 10;
+                    const currentRow = direction === 'horizontal' ? row : row + i;
+                    const currentCol = direction === 'horizontal' ? col + i : col;
+
+                    if (currentRow > 9 || currentCol > 9 || currentIndex >= 100 || cells[currentIndex].classList.contains("ship")) {
+                        return false;
+                    }
+
+                    // Проверка на отступ в 1 клетку
+                    const adjacentCells = getAdjacentCells(currentRow, currentCol);
+                    if (adjacentCells.some(adjIndex => cells[adjIndex] && cells[adjIndex].classList.contains("ship"))) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            function getAdjacentCells(row, col) {
+                const adjacent = [];
+                for (let i = -1; i <= 1; i++) {
+                    for (let j = -1; j <= 1; j++) {
+                        if (i !== 0 || j !== 0) {
+                            const adjRow = row + i;
+                            const adjCol = col + j;
+                            if (adjRow >= 0 && adjRow < 10 && adjCol >= 0 && adjCol < 10) {
+                                adjacent.push(adjRow * 10 + adjCol);
+                            }
+                        }
+                    }
+                }
+                return adjacent;
+            }
+
+            function placeShip(cells, index, size, direction, isPlayer) {
+                for (let i = 0; i < size; i++) {
+                    const currentIndex = direction === 'horizontal' ? index + i : index + i * 10;
+                    cells[currentIndex].classList.add("ship");
+                    if (isPlayer) {
+                        cells[currentIndex].classList.add("player");
+                    }
+                }
+            }
+
+            placeShipsRandomly(playerBoard, true);
+            placeShipsRandomly(computerBoard);
+
+            // Обработчик для атак по игровому полю
+            function handleAttack(cell, board) {
+                if (cell.classList.contains("hit") || cell.classList.contains("miss")) {
+                    return;
+                }
+                if (cell.classList.contains("ship")) {
+                    cell.classList.add("hit");
+                    if (board === playerBoard && cell.classList.contains("player")) {
+                        cell.classList.remove("player");
+                        // Сохраняем ссылку на последнюю пораженную клетку корабля
+                        targetDamagedShip = cell;
+                    }
+                    const cells = board.querySelectorAll(".cell");
+                    const shipIndices = getShipIndices(cell, cells);
+                    if (shipIndices.every(index => cells[index].classList.contains("hit"))) {
+                        markSurroundingCells(board, shipIndices);
+                        targetDamagedShip = null; // Сбрасываем, если корабль уничтожен
+                        damagedCellsQueue = []; // Сбрасываем очередь поврежденных клеток, если корабль уничтожен
+                        attackDirection = null;
+                    }
+                } else {
+                    cell.classList.add("miss");
+                    playerTurn = !playerTurn;
+                }
+                attackedCells.add(Array.from(board.querySelectorAll(".cell")).indexOf(cell)); // Добавляем клетку в список атакованных
+                checkForWin();
+            }
+
+            function getShipIndices(cell, cells) {
+                const index = Array.from(cells).indexOf(cell);
+                const shipIndices = [index];
+
+                // Проверяем слева и справа от начальной клетки
+                let i = 1;
+                while (index - i >= 0 && cells[index - i].classList.contains("ship") && Math.floor((index - i) / 10) === Math.floor(index / 10)) {
+                    shipIndices.push(index - i);
+                    i++;
+                }
+
+                i = 1;
+                while (index + i < 100 && cells[index + i].classList.contains("ship") && Math.floor((index + i) / 10) === Math.floor(index / 10)) {
+                    shipIndices.push(index + i);
+                    i++;
+                }
+
+                // Проверяем сверху и снизу от начальной клетки
+                i = 1;
+                while (index - i * 10 >= 0 && cells[index - i * 10].classList.contains("ship")) {
+                    shipIndices.push(index - i * 10);
+                    i++;
+                }
+
+                i = 1;
+                while (index + i * 10 < 100 && cells[index + i * 10].classList.contains("ship")) {
+                    shipIndices.push(index + i * 10);
+                    i++;
+                }
+
+                return shipIndices;
+            }
+
+            function markSurroundingCells(board, shipIndices) {
+                const cells = board.querySelectorAll(".cell");
+                const allAdjacentCells = new Set();
+
+                shipIndices.forEach(index => {
+                    const row = Math.floor(index / 10);
+                    const col = index % 10;
+                    const adjacentCells = getAdjacentCells(row, col);
+                    adjacentCells.forEach(adjIndex => {
+                        allAdjacentCells.add(adjIndex);
+                    });
+                });
+
+                allAdjacentCells.forEach(adjIndex => {
+                    if (cells[adjIndex] && !cells[adjIndex].classList.contains("hit") && !cells[adjIndex].classList.contains("miss")) {
+                        cells[adjIndex].classList.add("miss");
+                        attackedCells.add(adjIndex); // Добавляем в список атакованных клеток
+                    }
+                });
+            }
+
+            function checkForWin() {
+                if (isBoardCleared(computerBoard)) {
+                    alert("Поздравляем! Вы победили!");
+                    playerWins++;
+                    playerWinsElement.textContent = playerWins;
+                    resetGame();
+                } else if (isBoardCleared(playerBoard)) {
+                    alert("Компьютер победил. Попробуйте снова!");
+                    computerWins++;
+                    computerWinsElement.textContent = computerWins;
+                    resetGame();
+                }
+            }
+
+            function isBoardCleared(board) {
+                const cells = board.querySelectorAll(".cell");
+                return Array.from(cells).filter(cell => cell.classList.contains("ship") && !cell.classList.contains("hit")).length === 0;
+            }
+
+            function resetGame() {
+                playerBoard.innerHTML = '';
+                computerBoard.innerHTML = '';
+                createBoard(playerBoard);
+                createBoard(computerBoard);
+                placeShipsRandomly(playerBoard, true);
+                placeShipsRandomly(computerBoard);
+                playerTurn = true;
+                attackedCells.clear();
+                initializeEventListeners();
+            }
+
+            // Добавление обработчиков клика по клеткам компьютера
+            function initializeEventListeners() {
+                const computerCells = computerBoard.querySelectorAll(".cell");
+                computerCells.forEach(cell => {
+                    cell.addEventListener("click", () => {
+                        if (playerTurn && !cell.classList.contains("hit") && !cell.classList.contains("miss")) {
+                            handleAttack(cell, computerBoard);
+                            if (!cell.classList.contains("hit")) {
+                                playerTurn = false;
+                                setTimeout(computerTurn, 500);
+                            }
+                        }
+                    });
+                });
+            }
+
+            initializeEventListeners();
+
+            function computerTurn() {
+                const playerCells = playerBoard.querySelectorAll(".cell");
+                let targetCell;
+
+                if (damagedCellsQueue.length > 0) {
+                    targetCell = playerCells[damagedCellsQueue.shift()];
+                } else if (targetDamagedShip) {
+                    // Если есть поврежденный корабль, используем алгоритм поиска в ширину для добивания
+                    const queue = [{ cell: targetDamagedShip, direction: null }];
+                    const visited = new Set();
+
+                    while (queue.length > 0) {
+                        const current = queue.shift();
+                        const index = Array.from(playerCells).indexOf(current.cell);
+                        const row = Math.floor(index / 10);
+                        const col = index % 10;
+
+                        const possibleDirections = [
+                            { rowOffset: -1, colOffset: 0 }, // вверх
+                            { rowOffset: 1, colOffset: 0 },  // вниз
+                            { rowOffset: 0, colOffset: -1 }, // влево
+                            { rowOffset: 0, colOffset: 1 }   // вправо
+                        ];
+
+                        for (const direction of possibleDirections) {
+                            const newRow = row + direction.rowOffset;
+                            const newCol = col + direction.colOffset;
+                            if (newRow >= 0 && newRow < 10 && newCol >= 0 && newCol < 10) {
+                                const newIndex = newRow * 10 + newCol;
+                                if (!visited.has(newIndex) && !playerCells[newIndex].classList.contains("hit") && !playerCells[newIndex].classList.contains("miss")) {
+                                    visited.add(newIndex);
+                                    queue.push({ cell: playerCells[newIndex], direction: direction });
+                                    if (playerCells[newIndex].classList.contains("ship")) {
+                                        targetCell = playerCells[newIndex];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (targetCell) {
+                            break;
+                        }
+                    }
+                }
+
+                if (!targetCell) {
+                    // Стратегия четно-нечетного размещения атак
+                    const availableCells = Array.from(playerCells).filter((cell, index) =>
+                        !cell.classList.contains("hit") &&
+                        !cell.classList.contains("miss") &&
+                        !attackedCells.has(index) &&
+                        ((Math.floor(index / 10) + (index % 10)) % 2 === 0) // Проверка на четность суммы строки и столбца
+                    );
+
+                    if (availableCells.length > 0) {
+                        targetCell = availableCells[Math.floor(Math.random() * availableCells.length)];
+                    } else {
+                        // Если нет доступных четных клеток, выбираем любую оставшуюся клетку
+                        const remainingCells = Array.from(playerCells).filter(cell =>
+                            !cell.classList.contains("hit") &&
+                            !cell.classList.contains("miss") &&
+                            !attackedCells.has(Array.from(playerCells).indexOf(cell))
+                        );
+                        if (remainingCells.length > 0) {
+                            targetCell = remainingCells[Math.floor(Math.random() * remainingCells.length)];
+                        }
+                    }
+                }
+
+                if (!targetCell) {
+                    // Если все предыдущие стратегии не сработали, выбираем случайную неатакованную клетку
+                    const fallbackCells = Array.from(playerCells).filter(cell =>
+                        !cell.classList.contains("hit") &&
+                        !cell.classList.contains("miss")
+                    );
+                    if (fallbackCells.length > 0) {
+                        targetCell = fallbackCells[Math.floor(Math.random() * fallbackCells.length)];
+                    }
+                }
+
+                if (targetCell) {
+                    handleAttack(targetCell, playerBoard);
+                    if (targetCell.classList.contains("hit") && targetCell.classList.contains("ship")) {
+                        targetDamagedShip = targetCell; // Продолжаем атаковать поврежденный корабль
+                        if (!attackDirection) {
+                            attackDirection = determineAttackDirection(targetCell, playerCells);
+                        }
+                        setTimeout(computerTurn, 500);
+                    } else {
+                        playerTurn = true;
+                    }
+                }
+            }
+
+            function determineAttackDirection(cell, cells) {
+                const index = Array.from(cells).indexOf(cell);
+                const row = Math.floor(index / 10);
+                const col = index % 10;
+
+                const possibleDirections = [
+                    { rowOffset: -1, colOffset: 0 }, // вверх
+                    { rowOffset: 1, colOffset: 0 },  // вниз
+                    { rowOffset: 0, colOffset: -1 }, // влево
+                    { rowOffset: 0, colOffset: 1 }   // вправо
+                ];
+
+                // Упорядочиваем направления случайным образом для повышения непредсказуемости атак компьютера
+                possibleDirections.sort(() => Math.random() - 0.5);
+
+                for (const direction of possibleDirections) {
+                    const newRow = row + direction.rowOffset;
+                    const newCol = col + direction.colOffset;
+                    if (newRow >= 0 && newRow < 10 && newCol >= 0 && newCol < 10) {
+                        const newIndex = newRow * 10 + newCol;
+                        if (!cells[newIndex].classList.contains("hit") && !cells[newIndex].classList.contains("miss") && !attackedCells.has(newIndex)) {
+                            return direction;
+                        }
+                    }
+                }
+                return null;
+            }
+        });
+    </script>
+</body>
+</html>
